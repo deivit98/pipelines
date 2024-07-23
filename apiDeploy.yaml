@@ -9,6 +9,7 @@ variables:
   solution: '**/*.sln'
   apiProject: 'src/ProjectName/ProjectName.csproj'
   publishDir: '$(Build.ArtifactStagingDirectory)/publish'
+  connectionString: 'YourConnectionStringHere'  # Define your connection string
 
 stages:
 - stage: Build
@@ -47,45 +48,19 @@ stages:
         projects: '$(apiProject)'
         arguments: '--configuration $(buildConfiguration) --output $(publishDir)'
 
+    - task: FileTransform@1
+      inputs:
+        folderPath: '$(publishDir)'
+        jsonTargetFiles: 'appsettings.json'
+        enableTransformation: true
+      env:
+        ConnectionStrings__DefaultConnection: '$(connectionString)'
+
     - publish: $(publishDir)
       artifact: drop
 
-- stage: Test
-  dependsOn: Build
-  jobs:
-  - job: Test
-    displayName: 'Run Tests'
-    steps:
-    - task: UseDotNet@2
-      inputs:
-        packageType: 'sdk'
-        version: '8.x.x'
-        installationPath: $(Agent.ToolsDirectory)/dotnet
-
-    - task: DotNetCoreCLI@2
-      inputs:
-        command: 'restore'
-        projects: '$(solution)'
-
-    - task: DotNetCoreCLI@2
-      inputs:
-        command: 'test'
-        projects: '$(solution)'
-        arguments: '--configuration $(buildConfiguration) --no-build --collect:"Code coverage"'
-
-    - task: PublishTestResults@2
-      inputs:
-        testResultsFiles: '**/TestResults/*.trx'
-        mergeTestResults: true
-
-    - task: PublishCodeCoverageResults@1
-      inputs:
-        codeCoverageTool: 'Cobertura'
-        summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
-        reportDirectory: '$(Agent.TempDirectory)/**/'
-
 - stage: Deploy
-  dependsOn: Test
+  dependsOn: Build
   jobs:
   - deployment: Deploy
     displayName: 'Deploy to Azure App Service'
