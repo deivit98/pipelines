@@ -1,0 +1,106 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  solution: '**/*.sln'
+  apiProject: 'src/ProjectName/ProjectName.csproj'
+  publishDir: '$(Build.ArtifactStagingDirectory)/publish'
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    displayName: 'Build .NET 8 API'
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: 'sdk'
+        version: '8.x.x'
+        installationPath: $(Agent.ToolsDirectory)/dotnet
+
+    - task: NuGetToolInstaller@1
+
+    - task: NuGetCommand@2
+      inputs:
+        restoreSolution: '$(solution)'
+
+    - task: VSBuild@1
+      inputs:
+        solution: '$(solution)'
+        msbuildArgs: '/p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true /p:SkipInvalidConfigurations=true /p:PackageLocation="$(build.artifactStagingDirectory)"'
+        platform: '$(buildPlatform)'
+        configuration: '$(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '$(apiProject)'
+        arguments: '--configuration $(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'publish'
+        projects: '$(apiProject)'
+        arguments: '--configuration $(buildConfiguration) --output $(publishDir)'
+
+    - publish: $(publishDir)
+      artifact: drop
+
+- stage: Test
+  dependsOn: Build
+  jobs:
+  - job: Test
+    displayName: 'Run Tests'
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: 'sdk'
+        version: '8.x.x'
+        installationPath: $(Agent.ToolsDirectory)/dotnet
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'restore'
+        projects: '$(solution)'
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'test'
+        projects: '$(solution)'
+        arguments: '--configuration $(buildConfiguration) --no-build --collect:"Code coverage"'
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFiles: '**/TestResults/*.trx'
+        mergeTestResults: true
+
+    - task: PublishCodeCoverageResults@1
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+        reportDirectory: '$(Agent.TempDirectory)/**/'
+
+- stage: Deploy
+  dependsOn: Test
+  jobs:
+  - deployment: Deploy
+    displayName: 'Deploy to Azure App Service'
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: 'AzureSubName'
+              appType: 'webApp'
+              appName: 'ServiceName'
+              package: '$(System.DefaultWorkingDirectory)/drop/ProjectName.zip'
+              runtimeStack: 'DOTNETCORE|8.0'

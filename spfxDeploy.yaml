@@ -1,0 +1,88 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  dropFolder: '$(Build.ArtifactStagingDirectory)/drop'
+  spfxSolution: 'sharepoint/solution'
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    displayName: 'Build SPFx Web Part'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '16.x'
+      displayName: 'Install Node.js'
+
+    - script: |
+        echo "Installing global npm packages"
+        npm install -g gulp yo @microsoft/generator-sharepoint
+      displayName: 'Install Global npm Packages'
+
+    - script: |
+        echo "Restoring npm packages"
+        npm install
+      displayName: 'Restore npm Packages'
+
+    - script: |
+        echo "Building the SPFx project"
+        gulp build --ship
+      displayName: 'Build SPFx Project'
+
+    - script: |
+        echo "Bundling the SPFx project"
+        gulp bundle --ship
+      displayName: 'Bundle SPFx Project'
+
+    - script: |
+        echo "Packaging the SPFx solution"
+        gulp package-solution --ship
+      displayName: 'Package SPFx Solution'
+
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(spfxSolution)'
+        Contents: '*.sppkg'
+        TargetFolder: '$(dropFolder)'
+
+    - publish: $(dropFolder)
+      artifact: drop
+
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+  - deployment: Deploy
+    displayName: 'Deploy SPFx Web Part'
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+
+          - task: InstallSSHKey@0
+            inputs:
+              sshPublicKey: '$(sshPublicKey)'
+              sshKeySecureFile: '$(sshKeySecureFile)'
+              sshKeySecureFilePash: '$(sshKeySecureFilePash)'
+
+          - script: |
+              echo "Connecting to SharePoint Online"
+              npm install -g @pnp/office365-cli
+              o365 login --authType password --userName "$(sharepointUsername)" --password "$(sharepointPassword)"
+
+              echo "Deploying the SPFx solution package"
+              o365 spo app add --filePath "$(System.DefaultWorkingDirectory)/drop/*.sppkg" --overwrite
+              o365 spo app deploy --name "your-solution-package.sppkg" --appCatalogUrl "$(sharepointAppCatalogUrl)" --scope sitecollection
+            displayName: 'Deploy SPFx Solution to SharePoint Online'
+            env:
+              sharepointUsername: $(sharepointUsername)
+              sharepointPassword: $(sharepointPassword)
+              sharepointAppCatalogUrl: $(sharepointAppCatalogUrl)
